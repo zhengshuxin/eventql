@@ -3,4 +3,5 @@ evql
 evqld
 evqlctl
 cstable_tool
+cstable_benchmark
 evql-mysql-import

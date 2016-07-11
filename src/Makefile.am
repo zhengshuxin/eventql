@@ -1256,5 +1256,5 @@ cstable_benchmark_LDADD = \
     $(SIMDCOMP_LDADD) \
     $(PCRE_LDADD)
 
-bin_PROGRAMS += cstable-benchmark
+bin_PROGRAMS += cstable_benchmark
 
