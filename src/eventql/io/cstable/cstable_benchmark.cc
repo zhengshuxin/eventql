@@ -35,30 +35,40 @@
 
 int main(int argc, const char** argv) {
   Application::init();
-  Application::logToStderr("evql");
+  Application::logToStderr("cstable-benchmark");
 
-
-  auto base_path = argv[1];
-  String file_name = argv[2];
-
-  auto input_cstable_file = FileUtil::joinPaths(
-        base_path,
-        file_name + ".cst");
-
+  auto input_cstable_file = argv[1];
   if (!FileUtil::exists(input_cstable_file)) {
-    logError("evqld", "missing table file: $0", input_cstable_file);
+    logError("cstable-benchmark", "missing table file: $0", input_cstable_file);
     return 1;
   }
 
   auto cstable_filename = Random::singleton()->hex64();
-  auto cstable_filepath = FileUtil::joinPaths(base_path, cstable_filename);
+  auto cstable_filepath = FileUtil::joinPaths("/tmp", cstable_filename);
 
-  //cstable::TableSchema::fromProtobuf(*table->schema());
+  logInfo(
+      "cstable-benchmark",
+      "copying $0 to $1.cst",
+      input_cstable_file,
+      cstable_filepath);
+
   cstable::TableSchema cstable_schema_ext;
   cstable_schema_ext.addBool("__lsm_is_update", false);
   cstable_schema_ext.addString("__lsm_id", false);
-  cstable_schema_ext.addUnsignedInteger("__lsm_version", false);
   cstable_schema_ext.addUnsignedInteger("__lsm_sequence", false);
+
+  auto input_cstable = cstable::CSTableReader::openFile(input_cstable_file);
+  auto input_id_col = input_cstable->getColumnReader("__lsm_id");
+  auto input_sequence_col = input_cstable->getColumnReader("__lsm_sequence");
+
+  for (const auto& col : input_cstable->columns()) {
+    cstable_schema_ext.addColumn(
+        col.column_name,
+        col.logical_type,
+        col.storage_type,
+        false, /*repeated FIXME */
+        false); /* optional FIXME */
+  }
 
   auto cstable = cstable::CSTableWriter::createFile(
       cstable_filepath + ".cst",
@@ -67,17 +77,11 @@ int main(int argc, const char** argv) {
 
   auto is_update_col = cstable->getColumnWriter("__lsm_is_update");
   auto id_col = cstable->getColumnWriter("__lsm_id");
-  auto version_col = cstable->getColumnWriter("__lsm_version");
   auto sequence_col = cstable->getColumnWriter("__lsm_sequence");
   size_t rows_written = 0;
   size_t rows_skipped = 0;
 
   try {
-    auto input_cstable = cstable::CSTableReader::openFile(input_cstable_file);
-    auto input_id_col = input_cstable->getColumnReader("__lsm_id");
-    auto input_version_col = input_cstable->getColumnReader("__lsm_version");
-    auto input_sequence_col = input_cstable->getColumnReader("__lsm_sequence");
-
     Vector<Pair<
         RefPtr<cstable::ColumnReader>,
         RefPtr<cstable::ColumnWriter>>> columns;
@@ -94,16 +98,12 @@ int main(int argc, const char** argv) {
 
       String id_str;
       input_id_col->readString(&rlvl, &dlvl, &id_str);
-      SHA1Hash id(id_str.data(), id_str.size());
-      uint64_t version;
-      input_version_col->readUnsignedInt(&rlvl, &dlvl, &version);
 
       uint64_t sequence;
       input_sequence_col->readUnsignedInt(&rlvl, &dlvl, &sequence);
 
       is_update_col->writeBoolean(0, 0, false);
       id_col->writeString(0, 0, id_str);
-      version_col->writeUnsignedInt(0, 0, version);
       sequence_col->writeUnsignedInt(0, 0, sequence);
 
       for (auto& col : columns) {
@@ -122,8 +122,8 @@ int main(int argc, const char** argv) {
 
   } catch (const std::exception& e) {
     logError(
-        "evqld",
-        "error while compacting table: $0 -- $1",
+        "cstable-benchmark",
+        "error while copying table: $0 -- $1",
         input_cstable_file,
         e.what());
 
@@ -131,7 +131,5 @@ int main(int argc, const char** argv) {
   }
 
   cstable->commit();
-
-
   return 0;
 }
