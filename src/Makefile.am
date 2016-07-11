@@ -1248,3 +1248,13 @@ cstable_tool_LDADD = \
 
 bin_PROGRAMS += cstable_tool
 
+################# cstable-benchmark ####################
+cstable_benchmark_SOURCES = eventql/io/cstable/cstable_benchmark.cc
+cstable_benchmark_LDADD = \
+    evql_cstable.a \
+    evql_util.a \
+    $(SIMDCOMP_LDADD) \
+    $(PCRE_LDADD)
+
+bin_PROGRAMS += cstable-benchmark
+
