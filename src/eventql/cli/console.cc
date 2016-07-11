@@ -67,7 +67,11 @@ void Console::startInteractiveShell() {
   }
 }
 
-Console::Console(const CLIConfig cli_cfg) : cfg_(cli_cfg) {}
+Console::Console(
+      const CLIConfig cli_cfg,
+      Vector<String> arguments) :
+      cfg_(cli_cfg),
+      arguments_(arguments) {}
 
 Status Console::runQuery(const String& query) {
   if (cfg_.getBatchMode()) {
@@ -267,18 +271,41 @@ Status Console::sendRequest(const String& query, csql::BinaryResultParser* res_p
         cfg_.getPort());
 
     auto db = cfg_.getDatabase().isEmpty() ? "" : cfg_.getDatabase().get();
-    auto postdata = StringUtil::format(
-          "format=binary&query=$0&database=$1",
-          URI::urlEncode(query),
-          URI::urlEncode(db));
 
-    http::HTTPMessage::HeaderList auth_headers;
+    Buffer postdata;
+    json::JSONOutputStream json(BufferOutputStream::fromBuffer(&postdata));
+    json.beginObject();
+    json.addObjectEntry("format");
+    json.addString("binary");
+    json.addComma();
+    json.addObjectEntry("database");
+    json.addString(URI::urlEncode(db));
+    json.addComma();
+    json.addObjectEntry("query");
+    json.addString(URI::urlEncode(query));
+    json.addComma();
+    json.addObjectEntry("args");
+    json.beginArray();
+
+    for (size_t i = 0; i < arguments_.size(); ++i) {
+      if (i > 0) {
+        json.addComma();
+      }
+
+      json.addString(arguments_[i]);
+    }
+
+    json.endArray();
+    json.endObject();
+
+    http::HTTPMessage::HeaderList headers;
+    headers.emplace_back("Content-Type", "application/json");
     if (!cfg_.getAuthToken().isEmpty()) {
-      auth_headers.emplace_back(
+      headers.emplace_back(
           "Authorization",
           StringUtil::format("Token $0", cfg_.getAuthToken().get()));
     } else if (!cfg_.getPassword().isEmpty()) {
-      auth_headers.emplace_back(
+      headers.emplace_back(
           "Authorization",
           StringUtil::format("Basic $0",
               util::Base64::encode(
@@ -286,7 +313,7 @@ Status Console::sendRequest(const String& query, csql::BinaryResultParser* res_p
     }
 
     http::HTTPClient http_client(nullptr);
-    auto req = http::HTTPRequest::mkPost(url, postdata, auth_headers);
+    auto req = http::HTTPRequest::mkPost(url, postdata.toString(), headers);
     auto res = http_client.executeRequest(
         req,
         http::StreamingResponseHandler::getFactory(
