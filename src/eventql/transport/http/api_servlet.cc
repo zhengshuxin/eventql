@@ -933,8 +933,7 @@ void AnalyticsServlet::executeSQL(
 
     auto query = json::objectGetString(json, "query");
     if (!query.isEmpty()) {
-      //FIXME check arguments
-      params.emplace_back(std::make_pair("query",query.get()));
+      params.emplace_back(std::make_pair("query", query.get()));
     }
 
   } else {
