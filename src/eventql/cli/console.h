@@ -48,7 +48,7 @@ struct ConsoleOptions {
 class Console {
 public:
 
-  Console(const CLIConfig cli_cfg, Vector<String> arguments);
+  Console(const CLIConfig cli_cfg, HashMap<String, String> arguments);
 
   /**
    * Start an interactive shell. This method will never return
@@ -71,7 +71,7 @@ protected:
   Status sendRequest(const String& query, csql::BinaryResultParser* res_parser);
 
   CLIConfig cfg_;
-  Vector<String> arguments_;
+  HashMap<String, String> arguments_;
 };
 
 } // namespace cli

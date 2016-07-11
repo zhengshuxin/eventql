@@ -69,7 +69,7 @@ void Console::startInteractiveShell() {
 
 Console::Console(
       const CLIConfig cli_cfg,
-      Vector<String> arguments) :
+      HashMap<String, String> arguments) :
       cfg_(cli_cfg),
       arguments_(arguments) {}
 
@@ -279,23 +279,25 @@ Status Console::sendRequest(const String& query, csql::BinaryResultParser* res_p
     json.addString("binary");
     json.addComma();
     json.addObjectEntry("database");
-    json.addString(URI::urlEncode(db));
+    json.addString(db);
     json.addComma();
     json.addObjectEntry("query");
-    json.addString(URI::urlEncode(query));
+    json.addString(query);
     json.addComma();
     json.addObjectEntry("args");
-    json.beginArray();
+    json.beginObject();
 
-    for (size_t i = 0; i < arguments_.size(); ++i) {
-      if (i > 0) {
+    size_t i = 0;
+    for (const auto& arg : arguments_) {
+      if (++i > 1) {
         json.addComma();
       }
 
-      json.addString(arguments_[i]);
+      json.addObjectEntry(arg.first);
+      json.addString(arg.second);
     }
 
-    json.endArray();
+    json.endObject();
     json.endObject();
 
     http::HTTPMessage::HeaderList headers;

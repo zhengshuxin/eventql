@@ -475,6 +475,20 @@ int main(int argc, const char** argv) {
     cfg_builder.setProperty("evql", "quiet", "true");
   }
 
+  HashMap<String, String> arguments;
+  for (const auto arg : flags.getStrings("args")) {
+    auto key_end = arg.find("=");
+    if (key_end == String::npos) {
+      printError(StringUtil::format(
+          "invalid argument: $0, run evql --help for help\n",
+          arg));
+
+      return 1;
+    }
+
+    arguments[arg.substr(0, key_end)] = arg.substr(key_end + 1);
+  }
+
   /* cli config */
   eventql::cli::CLIConfig cli_cfg(cfg_builder.getConfig());
 
@@ -487,7 +501,7 @@ int main(int argc, const char** argv) {
   }
 
   /* cli */
-  eventql::cli::Console console(cli_cfg, flags.getStrings("args"));
+  eventql::cli::Console console(cli_cfg, arguments);
 
   auto file = cli_cfg.getFile();
   auto language = cli_cfg.getLanguage();
