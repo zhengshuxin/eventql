@@ -911,51 +911,44 @@ void AnalyticsServlet::getAuthInfo(
   res->setStatus(http::kStatusOK);
 }
 
-static String getQueryParam(
-    URI::ParamList params,
-    const http::HTTPRequest* req) {
-  if (req->hasHeader("Content-Type")) {
-    auto content_type = req->getHeader("Content-Type");
-
-    if (content_type == "application/json") {
-      auto json = json::parseJSON(req->body().toString());
-      auto query = json::objectGetString(json, "query");
-      if (query.isEmpty()) {
-        RAISE(kRuntimeError, "missing query")
-      } else {
-        return query.get();
-      }
-    }
-
-    if (content_type == "application/sql") {
-      auto query = req->body().toString();
-      return query;
-    }
-  }
-
-  String query;
-  if (URI::getParam(params, "query", &query)) {
-    return query;
-  } else {
-    RAISE(kRuntimeError, "missing ?query=... parameter");
-  }
-}
-
 void AnalyticsServlet::executeSQL(
     Session* session,
     const http::HTTPRequest* req,
     http::HTTPResponse* res,
     RefPtr<http::HTTPResponseStream> res_stream) {
-  try {
-    URI uri(req->uri());
-    URI::ParamList params = uri.queryParams();
+  Vector<std::pair<String, String>> params;
+  if (req->hasHeader("Content-Type") &&
+      req->getHeader("Content-Type") == "application/json") {
 
-    String format;
-    URI::getParam(params, "format", &format);
-    if (format.empty()) {
-      format = "json";
+    auto json = json::parseJSON(req->body().toString());
+    auto format = json::objectGetString(json, "format");
+    if (!format.isEmpty()) {
+      params.emplace_back(std::make_pair("format", format.get()));
     }
 
+    auto database = json::objectGetString(json, "database");
+    if (!database.isEmpty()) {
+      params.emplace_back(std::make_pair("database", database.get()));
+    }
+
+    auto query = json::objectGetString(json, "query");
+    if (!query.isEmpty()) {
+      //FIXME check arguments
+      params.emplace_back(std::make_pair("query",query.get()));
+    }
+
+  } else {
+
+    URI uri(req->uri());
+    params = uri.queryParams();
+  }
+
+  String format;
+  if (!URI::getParam(params, "format", &format)) {
+    format = "json";
+  }
+
+  try {
     if (format == "binary") {
       executeSQL_BINARY(params, session, req, res, res_stream);
     } else if (format == "json") {
@@ -1020,11 +1013,9 @@ void AnalyticsServlet::executeSQL_BINARY(
     http::HTTPResponse* res,
     RefPtr<http::HTTPResponseStream> res_stream) {
   String query;
-  try {
-    query = getQueryParam(params, req);
-  } catch (const Exception& e) {
+  if (!URI::getParam(params, "query", &query)) {
     res->setStatus(http::kStatusBadRequest);
-    res->addBody(e.getMessage());
+    res->addBody("missing ?query=... parameter");
     res_stream->writeResponse(*res);
     return;
   }
@@ -1082,11 +1073,9 @@ void AnalyticsServlet::executeSQL_JSON(
     http::HTTPResponse* res,
     RefPtr<http::HTTPResponseStream> res_stream) {
   String query;
-  try {
-    query = getQueryParam(params, req);
-  } catch (const Exception& e) {
+  if (!URI::getParam(params, "query", &query)) {
     res->setStatus(http::kStatusBadRequest);
-    res->addBody(e.getMessage());
+    res->addBody("missing ?query=... parameter");
     res_stream->writeResponse(*res);
     return;
   }
@@ -1175,11 +1164,9 @@ void AnalyticsServlet::executeSQL_JSONSSE(
     http::HTTPResponse* res,
     RefPtr<http::HTTPResponseStream> res_stream) {
   String query;
-  try {
-    query = getQueryParam(params, req);
-  } catch (const Exception& e) {
+  if (!URI::getParam(params, "query", &query)) {
     res->setStatus(http::kStatusBadRequest);
-    res->addBody(e.getMessage());
+    res->addBody("missing ?query=... parameter");
     res_stream->writeResponse(*res);
     return;
   }
