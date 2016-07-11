@@ -66,8 +66,8 @@ int main(int argc, const char** argv) {
         col.column_name,
         col.logical_type,
         col.storage_type,
-        false, /*repeated FIXME */
-        false); /* optional FIXME */
+        col.rlevel_max > 0, /*repeated FIXME */
+        col.dlevel_max > 0); /* optional FIXME */
   }
 
   auto cstable = cstable::CSTableWriter::createFile(
