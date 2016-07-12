@@ -59,6 +59,18 @@ RefPtr<CSTableWriter> CSTableWriter::createFile(
     BinaryFormatVersion version,
     const TableSchema& schema,
     Option<RefPtr<LockRef>> lockref /* = None<RefPtr<LockRef>>() */) {
+  return createFile(
+      filename,
+      BinaryFormatVersion::v0_2_0,
+      schema.flatColumns(),
+      lockref);
+}
+
+RefPtr<CSTableWriter> CSTableWriter::createFile(
+    const String& filename,
+    BinaryFormatVersion version,
+    const Vector<ColumnConfig> columns,
+    Option<RefPtr<LockRef>> lockref /* = None<RefPtr<LockRef>>() */) {
   auto file = File::openFile(filename, File::O_WRITE | File::O_CREATE);
 
   ScopedPtr<CSTableFile> arena;
@@ -66,7 +78,7 @@ RefPtr<CSTableWriter> CSTableWriter::createFile(
     case BinaryFormatVersion::v0_1_0:
       break;
     case BinaryFormatVersion::v0_2_0: {
-      arena.reset(new CSTableFile(version, schema.flatColumns(), file.fd()));
+      arena.reset(new CSTableFile(version, columns, file.fd()));
       arena->writeFileHeader(file.fd());
       break;
     }
@@ -76,7 +88,7 @@ RefPtr<CSTableWriter> CSTableWriter::createFile(
       version,
       arena.release(),
       true,
-      schema.flatColumns(),
+      columns,
       file.releaseFD());
 }
 

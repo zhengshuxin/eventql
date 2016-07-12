@@ -83,7 +83,7 @@ public:
    * implicitly requires a write lock on the new table and starts a transaction
    *
    * @param filename path to the file to be created
-   * @param columns column infos for all columns in this table
+   * @param schema table schema for this table
    * @param lockref optional lockref pointer for safe concurrent write access
    */
   static RefPtr<CSTableWriter> createFile(
@@ -103,6 +103,21 @@ public:
       const String& filename,
       BinaryFormatVersion version,
       const TableSchema& schema,
+      Option<RefPtr<LockRef>> lockref = None<RefPtr<LockRef>>());
+
+  /**
+   * Create a new cstable with the newest binary format version. This method
+   * implicitly requires a write lock on the new table and starts a transaction
+   *
+   * @param filename path to the file to be created
+   * @param version CSTable binary format version
+   * @param columns column infos for all columns in this table
+   * @param lockref optional lockref pointer for safe concurrent write access
+   */
+  static RefPtr<CSTableWriter> createFile(
+      const String& filename,
+      BinaryFormatVersion version,
+      const Vector<ColumnConfig> columns,
       Option<RefPtr<LockRef>> lockref = None<RefPtr<LockRef>>());
 
   /**
