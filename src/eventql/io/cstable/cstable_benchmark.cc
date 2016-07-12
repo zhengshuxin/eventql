@@ -96,7 +96,7 @@ int main(int argc, const char** argv) {
       cli::FlagParser::T_INTEGER,
       false,
       "c",
-      "50",
+      "10",
       "number of execution cycles",
       "<cycles>");
 
@@ -106,13 +106,52 @@ int main(int argc, const char** argv) {
 
   auto input_cstable_file = flags.getString("input_cstable");
   auto cycles = flags.getInt("cycles");
-  for (size_t i = 0; i < cycles; ++i) {
-    if (!copyTable(input_cstable_file)) {
-      return 1;
-    }
+
+  if (cycles < 1) {
+    logError("cstable-benchmark", "at least one cycle");
+    return 1;
   }
 
-  logInfo("cstable-benchmark", "Copied cstable $ times", cycles);
+  Vector<uint64_t> times;
+  size_t num_errors = 0;
+  uint64_t total_time = 0;
+  for (size_t i = 0; i < cycles; ++i) {
+    UnixTime start;
+    if (!copyTable(input_cstable_file)) {
+      ++num_errors;
+      continue;
+    }
+    auto time = UnixTime() - start;
+    times.emplace_back(time.milliseconds());
+    total_time += time.milliseconds();
+  }
+
+  sort(times.begin(), times.end());
+  auto stdout_os = OutputStream::getStdout();
+
+  uint64_t median;
+  auto ntimes = times.size();
+  if (ntimes % 2 == 0) {
+    median = (times[ntimes / 2 - 1] + times[ntimes / 2]) / 2;
+  } else {
+    median = times[ntimes / 2];
+  }
+
+  stdout_os->printf("%-12s", "Total time:");
+  stdout_os->write(StringUtil::format("$0s\n", total_time / kMillisPerSecond));
+  stdout_os->printf("%-12s", "Successful copies:");
+  stdout_os->write(StringUtil::format("$0\n", cycles - num_errors));
+  stdout_os->printf("%-12s", "Failed copies:");
+  stdout_os->write(StringUtil::format("$0\n\n", num_errors));
+  stdout_os->write("Copy Times (ms)\n");
+  stdout_os->printf("%-8s %-8s %-8s %-8s\n", "min", "mean", "median", "max");
+  stdout_os->printf(
+      "%-8s %-8s %-8s %-8s\n",
+      StringUtil::toString(times[0]).c_str(),
+      StringUtil::toString(total_time / cycles).c_str(),
+      StringUtil::toString(median).c_str(),
+      StringUtil::toString(times[times.size() - 1]).c_str());
+
   return 0;
 }
 
