@@ -156,7 +156,6 @@ public:
   void addRow();
   void addRows(size_t num_records);
 
-  const TableSchema* schema();
   const Vector<ColumnConfig>& columns() const;
 
 protected:
@@ -173,7 +172,6 @@ protected:
   void commitV2();
 
   BinaryFormatVersion version_;
-  RefPtr<TableSchema> schema_;
   CSTableFile* arena_;
   bool arena_owned_;
   PageManager* page_mgr_;

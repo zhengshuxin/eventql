@@ -151,7 +151,6 @@ CSTableWriter::CSTableWriter(
     Vector<ColumnConfig> columns,
     int fd) :
     version_(version),
-    schema_(std::move(schema)),
     arena_(arena),
     arena_owned_(arena_owned),
     page_mgr_(arena ? arena->getPageManager() : nullptr),
@@ -305,10 +304,6 @@ RefPtr<ColumnWriter> CSTableWriter::getColumnWriter(
 bool CSTableWriter::hasColumn(const String& column_name) const {
   auto col = column_writers_by_name_.find(column_name);
   return col != column_writers_by_name_.end();
-}
-
-const TableSchema* CSTableWriter::schema() {
-  return schema_.get();
 }
 
 const Vector<ColumnConfig>& CSTableWriter::columns() const {
