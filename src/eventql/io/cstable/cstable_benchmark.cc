@@ -42,12 +42,6 @@ static bool copyTable(const String& input_cstable_file) {
   auto cstable_filename = Random::singleton()->hex64();
   auto cstable_filepath = FileUtil::joinPaths("/tmp", cstable_filename);
 
-  logInfo(
-      "cstable-benchmark",
-      "copying $0 to $1.cst",
-      input_cstable_file,
-      cstable_filepath);
-
   auto input_cstable = cstable::CSTableReader::openFile(input_cstable_file);
   auto cstable = cstable::CSTableWriter::createFile(
       cstable_filepath + ".cst",
@@ -73,6 +67,7 @@ static bool copyTable(const String& input_cstable_file) {
     return false;
   }
 
+  FileUtil::rm(StringUtil::format("$0.cst", cstable_filepath));
   return true;
 }
 
@@ -137,11 +132,11 @@ int main(int argc, const char** argv) {
     median = times[ntimes / 2];
   }
 
-  stdout_os->printf("%-12s", "Total time:");
+  stdout_os->printf("%-26s", "Total time:");
   stdout_os->write(StringUtil::format("$0s\n", total_time / kMillisPerSecond));
-  stdout_os->printf("%-12s", "Successful copies:");
+  stdout_os->printf("%-26s", "Successful copies:");
   stdout_os->write(StringUtil::format("$0\n", cycles - num_errors));
-  stdout_os->printf("%-12s", "Failed copies:");
+  stdout_os->printf("%-26s", "Failed copies:");
   stdout_os->write(StringUtil::format("$0\n\n", num_errors));
   stdout_os->write("Copy Times (ms)\n");
   stdout_os->printf("%-8s %-8s %-8s %-8s\n", "min", "mean", "median", "max");
