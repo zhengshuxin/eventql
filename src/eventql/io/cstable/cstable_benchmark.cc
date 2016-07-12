@@ -48,34 +48,13 @@ static bool copyTable(const String& input_cstable_file) {
       input_cstable_file,
       cstable_filepath);
 
-  cstable::TableSchema cstable_schema_ext;
-  cstable_schema_ext.addBool("__lsm_is_update", false);
-  cstable_schema_ext.addString("__lsm_id", false);
-  cstable_schema_ext.addUnsignedInteger("__lsm_sequence", false);
-
   auto input_cstable = cstable::CSTableReader::openFile(input_cstable_file);
-  auto input_id_col = input_cstable->getColumnReader("__lsm_id");
-  auto input_sequence_col = input_cstable->getColumnReader("__lsm_sequence");
-
-  for (const auto& col : input_cstable->columns()) {
-    cstable_schema_ext.addColumn(
-        col.column_name,
-        col.logical_type,
-        col.storage_type,
-        col.rlevel_max > 0, /*repeated FIXME */
-        col.dlevel_max > 0); /* optional FIXME */
-  }
-
   auto cstable = cstable::CSTableWriter::createFile(
       cstable_filepath + ".cst",
       cstable::BinaryFormatVersion::v0_2_0,
-      cstable_schema_ext);
+      input_cstable->columns());
 
-  auto is_update_col = cstable->getColumnWriter("__lsm_is_update");
-  auto id_col = cstable->getColumnWriter("__lsm_id");
-  auto sequence_col = cstable->getColumnWriter("__lsm_sequence");
   size_t rows_written = 0;
-  size_t rows_skipped = 0;
 
   try {
     Vector<Pair<
@@ -89,18 +68,9 @@ static bool copyTable(const String& input_cstable_file) {
 
     auto nrecords = input_cstable->numRecords();
     for (size_t i = 0; i < nrecords; ++i) {
-      uint64_t rlvl;
-      uint64_t dlvl;
+     // String id_str;
+     // input_id_col->readString(&rlvl, &dlvl, &id_str);
 
-      String id_str;
-      input_id_col->readString(&rlvl, &dlvl, &id_str);
-
-      uint64_t sequence;
-      input_sequence_col->readUnsignedInt(&rlvl, &dlvl, &sequence);
-
-      is_update_col->writeBoolean(0, 0, false);
-      id_col->writeString(0, 0, id_str);
-      sequence_col->writeUnsignedInt(0, 0, sequence);
 
       for (auto& col : columns) {
         if (col.first.get()) {
