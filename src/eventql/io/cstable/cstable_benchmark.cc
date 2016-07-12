@@ -36,7 +36,7 @@
 static bool copyTable(const String& input_cstable_file) {
   if (!FileUtil::exists(input_cstable_file)) {
     logError("cstable-benchmark", "missing table file: $0", input_cstable_file);
-    return 1;
+    return false;
   }
 
   auto cstable_filename = Random::singleton()->hex64();
@@ -71,7 +71,6 @@ static bool copyTable(const String& input_cstable_file) {
      // String id_str;
      // input_id_col->readString(&rlvl, &dlvl, &id_str);
 
-
       for (auto& col : columns) {
         if (col.first.get()) {
           do {
@@ -93,20 +92,28 @@ static bool copyTable(const String& input_cstable_file) {
         input_cstable_file,
         e.what());
 
-    return 1;
+    return false;
   }
 
   cstable->commit();
-  return 0;
+  return true;
 }
 
 int main(int argc, const char** argv) {
   Application::init();
   Application::logToStderr("cstable-benchmark");
 
+  logInfo("cstable-benchmark", "Benchmarking CSTable copy...");
+
+  auto cycles = 10;
   auto input_cstable_file = argv[1];
-  return copyTable(input_cstable_file);
+  for (size_t i = 0; i < cycles; ++i) {
+    if (!copyTable(input_cstable_file)) {
+      return 1;
+    }
+  }
 
-
+  logInfo("cstable-benchmark", "Copied cstable $ times", cycles);
+  return 0;
 }
 
