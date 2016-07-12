@@ -33,18 +33,13 @@
 #include <eventql/io/cstable/cstable_writer.h>
 #include "eventql/eventql.h"
 
-static bool copyTable(const String& input_cstable_file) {
-  if (!FileUtil::exists(input_cstable_file)) {
-    logError("cstable-benchmark", "missing table file: $0", input_cstable_file);
-    return false;
-  }
-
-  auto cstable_filename = Random::singleton()->hex64();
-  auto cstable_filepath = FileUtil::joinPaths("/tmp", cstable_filename);
+static bool copyTable(
+    const String& cstable_filepath,
+    const String& input_cstable_file) {
 
   auto input_cstable = cstable::CSTableReader::openFile(input_cstable_file);
   auto cstable = cstable::CSTableWriter::createFile(
-      cstable_filepath + ".cst",
+      cstable_filepath,
       cstable::BinaryFormatVersion::v0_2_0,
       input_cstable->columns());
 
@@ -67,7 +62,6 @@ static bool copyTable(const String& input_cstable_file) {
     return false;
   }
 
-  FileUtil::rm(StringUtil::format("$0.cst", cstable_filepath));
   return true;
 }
 
@@ -100,38 +94,60 @@ int main(int argc, const char** argv) {
   logInfo("cstable-benchmark", "Benchmarking CSTable copy...");
 
   auto input_cstable_file = flags.getString("input_cstable");
-  auto cycles = flags.getInt("cycles");
+  if (!FileUtil::exists(input_cstable_file)) {
+    logError("cstable-benchmark", "missing table file: $0", input_cstable_file);
+    return false;
+  }
 
+  auto cycles = flags.getInt("cycles");
   if (cycles < 1) {
     logError("cstable-benchmark", "at least one cycle");
     return 1;
   }
 
   Vector<uint64_t> times;
+  Vector<uint64_t> bandwidths;
   size_t num_errors = 0;
   uint64_t total_time = 0;
+  uint64_t total_size = 0;
   for (size_t i = 0; i < cycles; ++i) {
+    auto cstable_filepath = FileUtil::joinPaths(
+        "/tmp",
+        StringUtil::format(
+            "$0.cst",
+            Random::singleton()->hex64()));
+
     UnixTime start;
-    if (!copyTable(input_cstable_file)) {
+    if (!copyTable(cstable_filepath, input_cstable_file)) {
       ++num_errors;
       continue;
     }
+
     auto time = UnixTime() - start;
     times.emplace_back(time.milliseconds());
     total_time += time.milliseconds();
+
+    auto size = FileUtil::size(cstable_filepath);
+    total_size += size;
+
+    FileUtil::rm(cstable_filepath);
   }
 
   sort(times.begin(), times.end());
-  auto stdout_os = OutputStream::getStdout();
-
-  uint64_t median;
   auto ntimes = times.size();
+  auto min = times[0];
+  auto max = times[ntimes - 1];
+  auto mean = total_time / ntimes;
+  uint64_t median;
   if (ntimes % 2 == 0) {
     median = (times[ntimes / 2 - 1] + times[ntimes / 2]) / 2;
   } else {
     median = times[ntimes / 2];
   }
 
+  auto bandwidth = FileUtil::size(input_cstable_file) / (total_time / kMillisPerSecond);
+
+  auto stdout_os = OutputStream::getStdout();
   stdout_os->printf("%-26s", "Total time:");
   stdout_os->write(StringUtil::format("$0s\n", total_time / kMillisPerSecond));
   stdout_os->printf("%-26s", "Successful copies:");
@@ -142,10 +158,15 @@ int main(int argc, const char** argv) {
   stdout_os->printf("%-8s %-8s %-8s %-8s\n", "min", "mean", "median", "max");
   stdout_os->printf(
       "%-8s %-8s %-8s %-8s\n",
-      StringUtil::toString(times[0]).c_str(),
-      StringUtil::toString(total_time / cycles).c_str(),
+      StringUtil::toString(min).c_str(),
+      StringUtil::toString(mean).c_str(),
       StringUtil::toString(median).c_str(),
-      StringUtil::toString(times[times.size() - 1]).c_str());
+      StringUtil::toString(max).c_str());
+
+  stdout_os->printf("%-26s", "Bandwith:");
+  stdout_os->write(StringUtil::format("$0s\n", bandwidth));
+
+
 
   return 0;
 }
