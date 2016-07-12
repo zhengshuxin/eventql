@@ -40,9 +40,6 @@ class RecordShredder {
 public:
 
   RecordShredder(
-      CSTableWriter* writer);
-
-  RecordShredder(
       CSTableWriter* writer,
       const TableSchema* schema);
 

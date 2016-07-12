@@ -31,10 +31,6 @@
 namespace cstable {
 
 RecordShredder::RecordShredder(
-    CSTableWriter* writer) :
-    RecordShredder(writer, writer->schema()) {}
-
-RecordShredder::RecordShredder(
     CSTableWriter* writer,
     const TableSchema* schema) :
     writer_(writer),
