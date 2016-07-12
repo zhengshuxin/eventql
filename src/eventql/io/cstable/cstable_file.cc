@@ -32,13 +32,23 @@ namespace cstable {
 CSTableFile::CSTableFile(
     BinaryFormatVersion version,
     const TableSchema& schema,
+    int fd /* = -1 */) {
+  CSTableFile(
+      version,
+      schema.flatColumns(),
+      fd);
+}
+
+CSTableFile::CSTableFile(
+    BinaryFormatVersion version,
+    Vector<ColumnConfig> columns,
     int fd /* = -1 */) :
     version_(version),
-    schema_(schema),
+    columns_(columns),
     transaction_id_(0),
     num_rows_(0) {
   FileHeader header;
-  header.columns = schema_.flatColumns();
+  header.columns = columns_;
 
   auto header_os = BufferOutputStream::fromBuffer(&file_header_);
   size_t header_size;
@@ -58,8 +68,8 @@ BinaryFormatVersion CSTableFile::getBinaryFormatVersion() const {
   return version_;
 }
 
-const TableSchema& CSTableFile::getTableSchema() const {
-  return schema_;
+const Vector<ColumnConfig> CSTableFile::getColumns() const {
+  return columns_;
 }
 
 PageManager* CSTableFile::getPageManager() {

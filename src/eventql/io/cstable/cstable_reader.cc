@@ -199,7 +199,7 @@ RefPtr<CSTableReader> CSTableReader::openFile(
   uint64_t num_rows;
   file->getTransaction(&transaction_id, &num_rows);
 
-  auto columns = file->getTableSchema().flatColumns();
+  auto columns = file->getColumns();
   Vector<RefPtr<ColumnReader>> column_readers;
   for (const auto& col : columns) {
     column_readers.emplace_back(openColumnV2(col, file->getPageManager()));

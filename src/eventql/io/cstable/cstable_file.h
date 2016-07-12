@@ -38,13 +38,19 @@ public:
       const TableSchema& schema,
       int fd = -1);
 
+  CSTableFile(
+      BinaryFormatVersion version,
+      Vector<ColumnConfig> columns,
+      int fd = -1);
+
   BinaryFormatVersion getBinaryFormatVersion() const;
-  const TableSchema& getTableSchema() const;
   const PageManager* getPageManager() const;
   PageManager* getPageManager();
 
   void commitTransaction(uint64_t transaction_id, uint64_t num_rows);
   void getTransaction(uint64_t* transaction_id, uint64_t* num_rows) const;
+
+  const Vector<ColumnConfig> getColumns() const;
 
   void writeFile(int fd);
   void writeFileHeader(int fd);
@@ -57,7 +63,7 @@ public:
 
 protected:
   BinaryFormatVersion version_;
-  TableSchema schema_;
+  Vector<ColumnConfig> columns_;
   Buffer file_header_;
   mutable std::mutex mutex_;
   uint64_t transaction_id_;

@@ -66,7 +66,7 @@ RefPtr<CSTableWriter> CSTableWriter::createFile(
     case BinaryFormatVersion::v0_1_0:
       break;
     case BinaryFormatVersion::v0_2_0: {
-      arena.reset(new CSTableFile(version, schema, file.fd()));
+      arena.reset(new CSTableFile(version, schema.flatColumns(), file.fd()));
       arena->writeFileHeader(file.fd());
       break;
     }
@@ -91,7 +91,7 @@ RefPtr<CSTableWriter> CSTableWriter::openFile(CSTableFile* arena) {
       arena->getBinaryFormatVersion(),
       arena,
       false,
-      arena->getTableSchema().flatColumns(),
+      arena->getColumns(),
       -1);
 }
 
