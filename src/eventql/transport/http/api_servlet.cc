@@ -840,12 +840,13 @@ void AnalyticsServlet::uploadTable(
       shard);
 
   try {
+    auto tbl_schema = cstable::TableSchema::fromProtobuf(*schema.get());
     auto cstable = cstable::CSTableWriter::createFile(
         tmpfile_path + ".cst",
         cstable::BinaryFormatVersion::v0_1_0,
-        cstable::TableSchema::fromProtobuf(*schema.get()));
+        tbl_schema);
 
-    cstable::RecordShredder shredder(cstable.get());
+    cstable::RecordShredder shredder(cstable.get(), &tbl_schema);
 
     {
       auto tmpfile = File::openFile(

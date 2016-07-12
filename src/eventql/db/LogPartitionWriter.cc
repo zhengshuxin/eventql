@@ -153,14 +153,15 @@ bool LogPartitionWriter::compact() {
   auto filepath = FileUtil::joinPaths(snap->base_path, "_cstable");
   auto filepath_tmp = filepath + "." + Random::singleton()->hex128();
   auto schema = partition_->getTable()->schema();
+  auto tbl_schema = cstable::TableSchema::fromProtobuf(*schema);
 
   {
     auto cstable = cstable::CSTableWriter::createFile(
         filepath_tmp,
         cstable::BinaryFormatVersion::v0_1_0,
-        cstable::TableSchema::fromProtobuf(*schema));
+        tbl_schema);
 
-    cstable::RecordShredder shredder(cstable.get());
+    cstable::RecordShredder shredder(cstable.get(), &tbl_schema);
 
     auto reader_ptr = partition_->getReader();
     auto& reader = dynamic_cast<LogPartitionReader&>(*reader_ptr);
@@ -168,7 +169,11 @@ bool LogPartitionWriter::compact() {
     std::atomic<size_t> total_size(0);
     reader.fetchRecords([this, &schema, &shredder, &total_size, &snap] (const Buffer& record) {
       msg::MessageObject obj;
-      msg::MessageDecoder::decode(record.data(), record.size(), *schema, &obj);
+      msg::MessageDecoder::decode(
+          record.data(),
+          record.size(),
+          *schema,
+          &obj);
       shredder.addRecordFromProtobuf(obj, *schema);
 
       total_size += record.size();
