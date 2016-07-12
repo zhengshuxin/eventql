@@ -54,36 +54,14 @@ static bool copyTable(const String& input_cstable_file) {
       cstable::BinaryFormatVersion::v0_2_0,
       input_cstable->columns());
 
-  size_t rows_written = 0;
+  auto nrecords = input_cstable->numRecords();
+  Vector<bool> copy_record(nrecords);
+  for (size_t i = 0; i < nrecords; ++i) {
+    copy_record[i] = true;
+  }
 
   try {
-    Vector<Pair<
-        RefPtr<cstable::ColumnReader>,
-        RefPtr<cstable::ColumnWriter>>> columns;
-    for (const auto& col : input_cstable->columns()) {
-      columns.emplace_back(
-              input_cstable->getColumnReader(col.column_name),
-              cstable->getColumnWriter(col.column_name));
-    }
-
-    auto nrecords = input_cstable->numRecords();
-    for (size_t i = 0; i < nrecords; ++i) {
-     // String id_str;
-     // input_id_col->readString(&rlvl, &dlvl, &id_str);
-
-      for (auto& col : columns) {
-        if (col.first.get()) {
-          do {
-            col.first->copyValue(col.second.get());
-          } while (col.first->nextRepetitionLevel() > 0);
-        } else {
-          col.second->writeNull(0, 0);
-        }
-      }
-
-      cstable->addRow();
-      ++rows_written;
-    }
+    input_cstable->copyTo(cstable, input_cstable->columns(), copy_record);
 
   } catch (const std::exception& e) {
     logError(
@@ -95,7 +73,6 @@ static bool copyTable(const String& input_cstable_file) {
     return false;
   }
 
-  cstable->commit();
   return true;
 }
 
@@ -103,10 +80,32 @@ int main(int argc, const char** argv) {
   Application::init();
   Application::logToStderr("cstable-benchmark");
 
+  cli::FlagParser flags;
+
+  flags.defineFlag(
+      "input_cstable",
+      cli::FlagParser::T_STRING,
+      true,
+      "t",
+      NULL,
+      "path to input cstable",
+      "<input_cstable>");
+
+  flags.defineFlag(
+      "cycles",
+      cli::FlagParser::T_INTEGER,
+      false,
+      "c",
+      "50",
+      "number of execution cycles",
+      "<cycles>");
+
+  flags.parseArgv(argc, argv);
+
   logInfo("cstable-benchmark", "Benchmarking CSTable copy...");
 
-  auto cycles = 10;
-  auto input_cstable_file = argv[1];
+  auto input_cstable_file = flags.getString("input_cstable");
+  auto cycles = flags.getInt("cycles");
   for (size_t i = 0; i < cycles; ++i) {
     if (!copyTable(input_cstable_file)) {
       return 1;
