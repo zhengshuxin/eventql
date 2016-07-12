@@ -284,6 +284,41 @@ size_t CSTableReader::numRecords() const {
 }
 
 
+void CSTableReader::copyTo(
+    RefPtr<CSTableWriter> target_cstable,
+    Vector<ColumnConfig> column_list,
+    Vector<bool> copy_record) {
+  Vector<Pair<
+      RefPtr<cstable::ColumnReader>,
+      RefPtr<cstable::ColumnWriter>>> columns;
+  for (const auto& col : column_list) {
+    columns.emplace_back(
+            getColumnReader(col.column_name),
+            target_cstable->getColumnWriter(col.column_name));
+  }
+
+  auto nrecords = num_rows_ < copy_record.size() ? num_rows_ : copy_record.size();
+  for (size_t i = 0; i < nrecords; ++i) {
+    if (!copy_record[i]) {
+      continue;
+    }
+
+    for (auto& col : columns) {
+      if (col.first.get()) {
+        do {
+          col.first->copyValue(col.second.get());
+        } while (col.first->nextRepetitionLevel() > 0);
+      } else {
+        col.second->writeNull(0, 0);
+      }
+    }
+
+    target_cstable->addRow();
+  }
+
+  target_cstable->commit();
+}
+
 } // namespace cstable
 
 

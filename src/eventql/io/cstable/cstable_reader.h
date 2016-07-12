@@ -28,6 +28,7 @@
 #include <eventql/io/cstable/cstable.h>
 #include <eventql/io/cstable/page_manager.h>
 #include <eventql/io/cstable/cstable_file.h>
+#include <eventql/io/cstable/cstable_writer.h>
 
 namespace cstable {
 
@@ -51,6 +52,11 @@ public:
   const Vector<ColumnConfig>& columns() const;
 
   size_t numRecords() const;
+
+  void copyTo(
+      RefPtr<CSTableWriter> target_table,
+      Vector<ColumnConfig> column_list,
+      Vector<bool> copy_record);
 
   const PageManager* getPageManager() const {
     return page_mgr_;
