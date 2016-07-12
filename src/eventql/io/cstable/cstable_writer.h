@@ -162,7 +162,6 @@ protected:
 
   CSTableWriter(
       BinaryFormatVersion version,
-      RefPtr<TableSchema> schema,
       CSTableFile* arena,
       bool arena_owned,
       Vector<ColumnConfig> columns,

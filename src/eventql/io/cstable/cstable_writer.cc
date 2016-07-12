@@ -74,7 +74,6 @@ RefPtr<CSTableWriter> CSTableWriter::createFile(
 
   return new CSTableWriter(
       version,
-      mkRef(new TableSchema(schema)),
       arena.release(),
       true,
       schema.flatColumns(),
@@ -90,7 +89,6 @@ RefPtr<CSTableWriter> CSTableWriter::reopenFile(
 RefPtr<CSTableWriter> CSTableWriter::openFile(CSTableFile* arena) {
   return new CSTableWriter(
       arena->getBinaryFormatVersion(),
-      mkRef(new TableSchema(arena->getTableSchema())),
       arena,
       false,
       arena->getTableSchema().flatColumns(),
@@ -145,7 +143,6 @@ static RefPtr<ColumnWriter> openColumnV2(
 
 CSTableWriter::CSTableWriter(
     BinaryFormatVersion version,
-    RefPtr<TableSchema> schema,
     CSTableFile* arena,
     bool arena_owned,
     Vector<ColumnConfig> columns,
