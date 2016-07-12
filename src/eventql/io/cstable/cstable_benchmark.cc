@@ -33,11 +33,7 @@
 #include <eventql/io/cstable/cstable_writer.h>
 #include "eventql/eventql.h"
 
-int main(int argc, const char** argv) {
-  Application::init();
-  Application::logToStderr("cstable-benchmark");
-
-  auto input_cstable_file = argv[1];
+static bool copyTable(const String& input_cstable_file) {
   if (!FileUtil::exists(input_cstable_file)) {
     logError("cstable-benchmark", "missing table file: $0", input_cstable_file);
     return 1;
@@ -133,3 +129,14 @@ int main(int argc, const char** argv) {
   cstable->commit();
   return 0;
 }
+
+int main(int argc, const char** argv) {
+  Application::init();
+  Application::logToStderr("cstable-benchmark");
+
+  auto input_cstable_file = argv[1];
+  return copyTable(input_cstable_file);
+
+
+}
+
