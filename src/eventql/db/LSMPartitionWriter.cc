@@ -56,26 +56,44 @@ LSMPartitionWriter::LSMPartitionWriter(
     repl_(cfg->repl_scheme.get()),
     partition_split_threshold_(kDefaultPartitionSplitThresholdBytes) {}
 
-Set<SHA1Hash> LSMPartitionWriter::insertRecords(const Vector<RecordRef>& records) {
+Set<SHA1Hash> LSMPartitionWriter::insertRecords(
+    const ShreddedRecordList& records) {
+  HashMap<SHA1Hash, uint64_t> rec_versions;
+  for (size_t i = 0; i < records.getNumRecords(); ++i) {
+    rec_versions.emplace(records.getRecordID(i), 0);
+  }
+
+  // opportunistically fetch indexes before going into critical section
+  auto snap = head_->getSnapshot();
+  Set<String> prepared_indexes;
+  {
+    const auto& tables = snap->state.lsm_tables();
+    for (auto tbl = tables.rbegin(); tbl != tables.rend(); ++tbl) {
+      auto idx_path = FileUtil::joinPaths(snap->rel_path, tbl->filename());
+      auto idx = idx_cache_->lookup(idx_path);
+      idx->lookup(&rec_versions);
+      prepared_indexes.insert(idx_path);
+    }
+  }
+
   std::unique_lock<std::mutex> lk(mutex_);
   if (frozen_) {
     RAISE(kIllegalStateError, "partition is frozen");
   }
 
-  auto snap = head_->getSnapshot();
+  snap = head_->getSnapshot();
+  const auto& tables = snap->state.lsm_tables();
+  if (tables.size() > kMaxLSMTables) {
+    RAISE(kRuntimeError, "partition is overloaded, can't insert");
+  }
 
   logTrace(
       "tsdb",
       "Insert $0 record into partition $1/$2/$3",
-      records.size(),
+      records.getNumRecords(),
       snap->state.tsdb_namespace(),
       snap->state.table_key(),
       snap->key.toString());
-
-  HashMap<SHA1Hash, uint64_t> rec_versions;
-  for (const auto& r : records) {
-    rec_versions.emplace(r.record_id, snap->head_arena->fetchRecordVersion(r.record_id));
-  }
 
   if (snap->compacting_arena.get() != nullptr) {
     for (auto& r : rec_versions) {
@@ -86,36 +104,38 @@ Set<SHA1Hash> LSMPartitionWriter::insertRecords(const Vector<RecordRef>& records
     }
   }
 
-  const auto& tables = snap->state.lsm_tables();
-  if (tables.size() > kMaxLSMTables) {
-    RAISE(kRuntimeError, "partition is overloaded, can't insert");
-  }
-
   for (auto tbl = tables.rbegin(); tbl != tables.rend(); ++tbl) {
-    auto idx = idx_cache_->lookup(
-        FileUtil::joinPaths(snap->rel_path, tbl->filename()));
-    idx->lookup(&rec_versions);
+    auto idx_path = FileUtil::joinPaths(snap->rel_path, tbl->filename());
+    if (prepared_indexes.count(idx_path) > 0) {
+      continue;
+    }
 
-    // FIMXE early exit...
+    auto idx = idx_cache_->lookup(idx_path);
+    idx->lookup(&rec_versions);
   }
 
-  Set<SHA1Hash> inserted_ids;
+  Vector<bool> record_flags_skip(records.getNumRecords(), false);
+  Vector<bool> record_flags_update(records.getNumRecords(), false);
+
   if (!rec_versions.empty()) {
-    for (auto r : records) {
-      auto headv = rec_versions[r.record_id];
+    for (size_t i = 0; i < records.getNumRecords(); ++i) {
+      const auto& record_id = records.getRecordID(i);
+      auto headv = rec_versions[record_id];
       if (headv > 0) {
-        r.is_update = true;
+        record_flags_update[i] = true;
       }
 
-      if (r.record_version <= headv) {
+      if (records.getRecordVersion(i) <= headv) {
+        record_flags_skip[i] = true;
         continue;
-      }
-
-      if (snap->head_arena->insertRecord(r)) {
-        inserted_ids.emplace(r.record_id);
       }
     }
   }
+
+  auto inserted_ids = snap->head_arena->insertRecords(
+      records,
+      record_flags_skip,
+      record_flags_update);
 
   lk.unlock();
 
