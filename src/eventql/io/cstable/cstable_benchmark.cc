@@ -130,7 +130,6 @@ int main(int argc, const char** argv) {
     auto size = (double) FileUtil::size(cstable_filepath) / 1024 / 1024;
     bandwidths.emplace_back(size / (duration));
     total_size += size;
-    iputs("size $0, seconds $1", size, duration);
 
     FileUtil::rm(cstable_filepath);
   }
