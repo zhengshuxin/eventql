@@ -105,11 +105,11 @@ int main(int argc, const char** argv) {
     return 1;
   }
 
-  Vector<uint64_t> times;
-  Vector<uint64_t> bandwidths;
-  size_t num_errors = 0;
-  uint64_t total_time = 0;
+  Vector<uint64_t> durations;
+  Vector<double> bandwidths;
+  uint64_t total_duration = 0;
   uint64_t total_size = 0;
+  size_t num_errors = 0;
   for (size_t i = 0; i < cycles; ++i) {
     auto cstable_filepath = FileUtil::joinPaths(
         "/tmp",
@@ -123,50 +123,75 @@ int main(int argc, const char** argv) {
       continue;
     }
 
-    auto time = UnixTime() - start;
-    times.emplace_back(time.milliseconds());
-    total_time += time.milliseconds();
+    auto duration = (UnixTime() - start).milliseconds();
+    durations.emplace_back(duration);
+    total_duration += duration;
 
-    auto size = FileUtil::size(cstable_filepath);
+    auto size = (double) FileUtil::size(cstable_filepath) / 1024 / 1024;
+    bandwidths.emplace_back(size / (duration));
     total_size += size;
+    iputs("size $0, seconds $1", size, duration);
 
     FileUtil::rm(cstable_filepath);
   }
 
-  sort(times.begin(), times.end());
-  auto ntimes = times.size();
-  auto min = times[0];
-  auto max = times[ntimes - 1];
-  auto mean = total_time / ntimes;
-  uint64_t median;
-  if (ntimes % 2 == 0) {
-    median = (times[ntimes / 2 - 1] + times[ntimes / 2]) / 2;
-  } else {
-    median = times[ntimes / 2];
-  }
-
-  auto bandwidth = FileUtil::size(input_cstable_file) / (total_time / kMillisPerSecond);
-
   auto stdout_os = OutputStream::getStdout();
-  stdout_os->printf("%-26s", "Total time:");
-  stdout_os->write(StringUtil::format("$0s\n", total_time / kMillisPerSecond));
   stdout_os->printf("%-26s", "Successful copies:");
   stdout_os->write(StringUtil::format("$0\n", cycles - num_errors));
   stdout_os->printf("%-26s", "Failed copies:");
-  stdout_os->write(StringUtil::format("$0\n\n", num_errors));
-  stdout_os->write("Copy Times (ms)\n");
-  stdout_os->printf("%-8s %-8s %-8s %-8s\n", "min", "mean", "median", "max");
-  stdout_os->printf(
-      "%-8s %-8s %-8s %-8s\n",
-      StringUtil::toString(min).c_str(),
-      StringUtil::toString(mean).c_str(),
-      StringUtil::toString(median).c_str(),
-      StringUtil::toString(max).c_str());
+  stdout_os->write(StringUtil::format("$0\n", num_errors));
+  stdout_os->printf("%-26s", "Total time:");
+  stdout_os->write(StringUtil::format(
+      "$0 seconds\n",
+      (double) total_duration / kMillisPerSecond));
+  stdout_os->printf("%-26s", "Total copied:");
+  stdout_os->write(StringUtil::format("$0 MB\n\n", total_size));
 
-  stdout_os->printf("%-26s", "Bandwith:");
-  stdout_os->write(StringUtil::format("$0s\n", bandwidth));
+  {
+    sort(durations.begin(), durations.end());
+    auto ncycles = durations.size();
+    auto min = (double) durations[0] / kMillisPerSecond;
+    auto max = (double) durations[ncycles - 1] / kMillisPerSecond;
+    auto mean = (double) (total_duration / ncycles) / kMillisPerSecond;
+    double median;
+    if (ncycles % 2 == 0) {
+      median = (double) ((durations[ncycles / 2 - 1] + durations[ncycles / 2]) / 2) / kMillisPerSecond;
+    } else {
+      median = (double) durations[ncycles / 2] / kMillisPerSecond;
+    }
 
+    stdout_os->write("Times (s)\n");
+    stdout_os->printf("%-8s %-8s %-8s %-8s\n", "min", "mean", "median", "max");
+    stdout_os->printf(
+        "%-8s %-8s %-8s %-8s\n\n",
+        StringUtil::toString(min).c_str(),
+        StringUtil::toString(mean).c_str(),
+        StringUtil::toString(median).c_str(),
+        StringUtil::toString(max).c_str());
+  }
 
+  {
+    sort(bandwidths.begin(), bandwidths.end());
+    auto ncycles = bandwidths.size();
+    double min = bandwidths[0] * kMillisPerSecond;
+    double max = bandwidths[ncycles - 1] * kMillisPerSecond;
+    auto mean = ((double) total_size / total_duration) * kMillisPerSecond;
+    double median;
+    if (ncycles % 2 == 0) {
+      median = (bandwidths[ncycles / 2 - 1] + bandwidths[ncycles / 2]) / 2 * kMillisPerSecond;
+    } else {
+      median = bandwidths[ncycles / 2] * kMillisPerSecond;
+    }
+
+    stdout_os->printf("%-26s\n", "Bandwith (MB/s):");
+    stdout_os->printf("%-8s %-8s %-8s %-8s\n", "min", "mean", "median", "max");
+    stdout_os->printf(
+        "%-8s %-8s %-8s %-8s\n",
+        StringUtil::toString(min).c_str(),
+        StringUtil::toString(mean).c_str(),
+        StringUtil::toString(median).c_str(),
+        StringUtil::toString(max).c_str());
+  }
 
   return 0;
 }
