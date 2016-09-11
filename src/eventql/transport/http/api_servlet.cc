@@ -91,45 +91,13 @@ void APIServlet::handle(
     return;
   }
 
-  if (!dbctx->process_config->getBool("server.anonymous")) {
-    auto internal_auth_rc = dbctx->internal_auth->verifyRequest(session, req);
-    auto auth_rc = internal_auth_rc;
-    if (!auth_rc.isSuccess()) {
-      auth_rc = HTTPAuth::authenticateRequest(
-          session,
-          dbctx->client_auth,
-          req);
-    }
-
-    if (!auth_rc.isSuccess()) {
-      req_stream->readBody();
-
-      if (uri.path() == "/api/v1/sql") {
-        util::BinaryMessageWriter writer;
-        res.setStatus(http::kStatusOK);
-        writer.appendUInt8(0xf4);
-        writer.appendLenencString(auth_rc.message());
-        writer.appendUInt8(0xff);
-        res.addBody(writer.data(), writer.size());
-        res_stream->writeResponse(res);
-      } else {
-        res.setStatus(http::kStatusUnauthorized);
-        res.addHeader("WWW-Authenticate", "Token");
-        res.addHeader("Content-Type", "text/plain; charset=utf-8");
-        res.addBody(auth_rc.message());
-        res_stream->writeResponse(res);
-        return;
-      }
-    }
-
-    if (session->getEffectiveNamespace().empty()) {
-      res.setStatus(http::kStatusUnauthorized);
-      res.addHeader("WWW-Authenticate", "Token");
-      res.addHeader("Content-Type", "text/plain; charset=utf-8");
-      res.addBody("unauthorized");
-      res_stream->writeResponse(res);
-      return;
-    }
+  auto internal_auth_rc = dbctx->internal_auth->verifyRequest(session, req);
+  auto auth_rc = internal_auth_rc;
+  if (!auth_rc.isSuccess()) {
+    auth_rc = HTTPAuth::authenticateRequest(
+        session,
+        dbctx->client_auth,
+        req);
   }
 
   if (uri.path() == "/api/v1/tables/insert") {
@@ -139,6 +107,27 @@ void APIServlet::handle(
     });
     res_stream->writeResponse(res);
     return;
+  }
+
+  if (!auth_rc.isSuccess()) {
+    req_stream->readBody();
+
+    if (uri.path() == "/api/v1/sql") {
+      util::BinaryMessageWriter writer;
+      res.setStatus(http::kStatusOK);
+      writer.appendUInt8(0xf4);
+      writer.appendLenencString(auth_rc.message());
+      writer.appendUInt8(0xff);
+      res.addBody(writer.data(), writer.size());
+      res_stream->writeResponse(res);
+    } else {
+      res.setStatus(http::kStatusUnauthorized);
+      res.addHeader("WWW-Authenticate", "Token");
+      res.addHeader("Content-Type", "text/plain; charset=utf-8");
+      res.addBody(auth_rc.message());
+      res_stream->writeResponse(res);
+      return;
+    }
   }
 
   /* SQL */
@@ -161,12 +150,19 @@ void APIServlet::handle(
     return;
   }
 
+  if (session->getEffectiveNamespace().empty()) {
+    res.setStatus(http::kStatusUnauthorized);
+    res.addHeader("WWW-Authenticate", "Token");
+    res.addHeader("Content-Type", "text/plain; charset=utf-8");
+    res.addBody("unauthorized");
+    res_stream->writeResponse(res);
+    return;
+  }
+
   /* TABLES */
   if (uri.path() == "/api/v1/tables") {
     req_stream->readBody();
-    catchAndReturnErrors(&res, [this, session, &req, &res] {
-      listTables(session, &req, &res);
-    });
+    listTables(session, &req, &res);
     res_stream->writeResponse(res);
     return;
   }
@@ -198,10 +194,39 @@ void APIServlet::handle(
     return;
   }
 
-  if (uri.path() == "/api/v1/tables/describe") {
+  if (uri.path() == "/api/v1/tables/add_tag") {
     req_stream->readBody();
-    fetchTableDefinition(session, &req, &res);
+    catchAndReturnErrors(&res, [this, &session, &req, &res] {
+      addTableTag(session, &req, &res);
+    });
     res_stream->writeResponse(res);
+    return;
+  }
+
+  if (uri.path() == "/api/v1/tables/remove_tag") {
+    req_stream->readBody();
+    catchAndReturnErrors(&res, [this, &session, &req, &res] {
+      removeTableTag(session, &req, &res);
+    });
+    res_stream->writeResponse(res);
+    return;
+  }
+
+  static const String kTablesPathPrefix = "/api/v1/tables/";
+  if (StringUtil::beginsWith(uri.path(), kTablesPathPrefix)) {
+    req_stream->readBody();
+    fetchTableDefinition(
+        session,
+        uri.path().substr(kTablesPathPrefix.size()),
+        &req,
+        &res);
+    res_stream->writeResponse(res);
+    return;
+  }
+
+  if (uri.path() == "/api/v1/sql/execute_qtree") {
+    req_stream->readBody();
+    executeQTree(session, &req, &res, res_stream);
     return;
   }
 
@@ -222,23 +247,21 @@ void APIServlet::listTables(
     const http::HTTPRequest* req,
     http::HTTPResponse* res) {
   auto dbctx = session->getDatabaseContext();
-  auto jreq = json::parseJSON(req->body());
 
-  /* database */
-  auto database = getRequestDatabase(session, req, jreq);
-  if (database.isEmpty()) {
-    RAISE(kRuntimeError, "missing field: database");
-  }
+  URI uri(req->uri());
+  const auto& params = uri.queryParams();
 
   /* param tag */
-  auto tag_filter_opt = json::objectGetString(jreq, "tag");
   String tag_filter;
-  if (!tag_filter_opt.isEmpty() && tag_filter_opt.get() != "all") {
-    tag_filter = tag_filter_opt.get();
+  URI::getParam(params, "tag", &tag_filter);
+
+  if (tag_filter == "all") {
+    tag_filter.clear();
   }
 
   /* param sort_fn */
-  auto order_filter = json::objectGetString(jreq, "order");
+  String order_filter;
+  URI::getParam(params, "order", &order_filter);
 
   Buffer buf;
   json::JSONOutputStream json(BufferOutputStream::fromBuffer(&buf));
@@ -279,10 +302,10 @@ void APIServlet::listTables(
 
   };
 
-  if (!order_filter.isEmpty() && order_filter.get() == "desc") {
-    dbctx->table_service->listTablesReverse(database.get(), writeTableJSON);
+  if (order_filter == "desc") {
+    dbctx->table_service->listTablesReverse(session->getEffectiveNamespace(), writeTableJSON);
   } else {
-    dbctx->table_service->listTables(database.get(), writeTableJSON);
+    dbctx->table_service->listTables(session->getEffectiveNamespace(), writeTableJSON);
   }
 
   json.endArray();
@@ -295,216 +318,27 @@ void APIServlet::listTables(
 
 void APIServlet::fetchTableDefinition(
     Session* session,
+    const String& table_name,
     const http::HTTPRequest* req,
     http::HTTPResponse* res) {
   auto dbctx = session->getDatabaseContext();
-  auto jreq = json::parseJSON(req->body());
 
-  /* database */
-  auto database = getRequestDatabase(session, req, jreq);
-  if (database.isEmpty()) {
-    RAISE(kRuntimeError, "missing field: database");
-  }
-
-  auto table_name = json::objectGetString(jreq, "table");
-  if (table_name.isEmpty()) {
-    RAISE(kRuntimeError, "missing field: table");
-  }
-
-  Buffer buf;
-  json::JSONOutputStream json(BufferOutputStream::fromBuffer(&buf));
-  auto schema = dbctx->table_service->tableSchema(database.get(), table_name.get());
-  if (schema.isEmpty()) {
+  auto table = dbctx->partition_map->findTable(session->getEffectiveNamespace(), table_name);
+  if (table.isEmpty()) {
     res->setStatus(http::kStatusNotFound);
     res->addBody("table not found");
     return;
   }
 
-  schema.get()->toJSON(&json);
+  Buffer buf;
+  json::JSONOutputStream json(BufferOutputStream::fromBuffer(&buf));
+  auto schema = table.get()->schema();
+  schema->toJSON(&json);
 
   res->setStatus(http::kStatusOK);
   res->setHeader("Content-Type", "application/json; charset=utf-8");
   res->addBody(buf);
 }
-
-//buildColumnSchema
-
-//ReturnCode buildTableSchema(
-//    JSONObject::const_iterator begin,
-//    JSONObject::const_iterator end,
-//    TableSchema* schema) {
-//
-//  auto num_cols = json::arrayLength(begin, end);
-//  for (size_t i = 0; i < num_cols; ++i) {
-//    auto jcol = json::arrayLookup(begin, end, i);
-//    auto type = json::objectGetString(jcol, "type");
-//    if (type.isEmpty()) {
-//      return ReturnCode::error("missing field: type");
-//    }
-//
-//    auto name = json::objectGetString(jcol, "name");
-//    if (name.isEmpty()) {
-//      return ReturnCode::error("missing field: name");
-//    }
-//
-//    TableSchema::Column col;
-//  }
-//}
-
-//static Status buildMessageSchema(
-//    JSONObject::const_iterator begin,
-//    JSONObject::const_iterator end,
-//    msg::MessageSchema* schema) {
-//  uint32_t id = 0;
-//  Set<String> column_names;
-//
-//  auto num_cols = json::arrayLength(begin, end);
-//  for (size_t i = 0; i < num_cols; ++i) {
-//    auto col = json::objectLookup(
-//    if (column_names.count(c->column_name) > 0) {
-//      return Status(
-//          eIllegalArgumentError,
-//          StringUtil::format("duplicate column: $0", c->column_name));
-//    }
-//
-//    column_names.emplace(c->column_name);
-//
-//    bool repeated = false;
-//    bool optional = true;
-//
-//    for (const auto& o : c->column_options) {
-//      switch (o) {
-//        case csql::TableSchema::ColumnOptions::NOT_NULL:
-//          optional = false;
-//          break;
-//        case csql::TableSchema::ColumnOptions::REPEATED:
-//          repeated = true;
-//          break;
-//        default:
-//          continue;
-//      }
-//    }
-//
-//    switch (c->column_class) {
-//      case csql::TableSchema::ColumnClass::SCALAR: {
-//        auto type_str = c->column_type;
-//        StringUtil::toUpper(&type_str);
-//        auto type = kTypeMap.find(type_str);
-//        if (type == kTypeMap.end()) {
-//          return Status(
-//              eIllegalArgumentError,
-//              StringUtil::format(
-//                  "invalid type: '$0' for column '$1'",
-//                  c->column_type,
-//                  c->column_name));
-//        }
-//
-//        schema->addField(
-//            msg::MessageSchemaField(
-//                ++id,
-//                c->column_name,
-//                type->second,
-//                0, /* type size */
-//                repeated,
-//                optional));
-//
-//        break;
-//      }
-//
-//      case csql::TableSchema::ColumnClass::RECORD: {
-//        auto s = mkRef(new msg::MessageSchema(nullptr));
-//
-//        auto rc = buildMessageSchema(c->getSubColumns(), s.get());
-//        if (!rc.isSuccess()) {
-//          return rc;
-//        }
-//
-//        schema->addField(
-//            msg::MessageSchemaField::mkObjectField(
-//                ++id,
-//                c->column_name,
-//                repeated,
-//                optional,
-//                s));
-//
-//        break;
-//      }
-//
-//    }
-//  }
-//
-//  return Status::success();
-//}
-//static ReturnCode buildMessageSchema(
-//    json::JSONObject::const_iterator cols,
-//    json::JSONObject::const_iterator end,
-//    MessageSchema* schema,
-//    size_t id = 1) {
-//  //§auto tname = json::objectGetString(begin, end, "name");
-//  //§if (!tname.isEmpty()) {
-//  //§  name_ = tname.get();
-//  //§}
-//
-//  //§auto cols = json::objectLookup(begin, end, "columns");
-//  //§if (cols == end) {
-//  //§  RAISE(kRuntimeError, "missing field: columns");
-//  //§}
-//
-//  auto ncols = json::arrayLength(cols, end);
-//  for (size_t i = 0; i < ncols; ++i) {
-//    auto col = json::arrayLookup(cols, end, i); // O(N^2) but who cares...
-//
-//    //auto id = json::objectGetUInt64(col, end, "id");
-//    //if (id.isEmpty()) {
-//    //  RAISE(kRuntimeError, "missing field: id");
-//    //}
-//
-//    auto name = json::objectGetString(col, end, "name");
-//    if (name.isEmpty()) {
-//      RAISE(kRuntimeError, "missing field: name");
-//    }
-//
-//    auto type = json::objectGetString(col, end, "type");
-//    if (type.isEmpty()) {
-//      RAISE(kRuntimeError, "missing field: type");
-//    }
-//
-//    auto optional = json::objectGetBool(col, end, "optional");
-//    auto repeated = json::objectGetBool(col, end, "repeated");
-//
-//    auto field_type = fieldTypeFromString(type.get());
-//
-//    if (field_type == msg::FieldType::OBJECT) {
-//      auto child_schema_json = json::objectLookup(col, end, "schema");
-//      if (child_schema_json == end) {
-//        RAISE(kRuntimeError, "missing field: schema");
-//      }
-//
-//      auto child_schema = mkRef(new MessageSchema(nullptr));
-//      auto rc = buildMessageSchema(child_schema_json, end, child_schema.get());
-//
-//      schema->addField(
-//          MessageSchemaField::mkObjectField(
-//              id.get(),
-//              name.get(),
-//              repeated.isEmpty() ? false : repeated.get(),
-//              optional.isEmpty() ? false : optional.get(),
-//              child_schema));
-//    } else {
-//      schema->addField(
-//          MessageSchemaField(
-//              id.get(),
-//              name.get(),
-//              field_type,
-//              0, //type_size
-//              repeated.isEmpty() ? false : repeated.get(),
-//              optional.isEmpty() ? false : optional.get()));
-//    }
-//  }
-//
-//  return ReturnCode::success();
-//}
-
 
 void APIServlet::createTable(
     Session* session,
@@ -514,11 +348,6 @@ void APIServlet::createTable(
 
   auto jreq = json::parseJSON(req->body());
 
-  auto database = getRequestDatabase(session, req, jreq);
-  if (database.isEmpty()) {
-    RAISE(kRuntimeError, "missing field: database");
-  }
-
   auto table_name = json::objectGetString(jreq, "table_name");
   if (table_name.isEmpty()) {
     res->setStatus(http::kStatusBadRequest);
@@ -526,45 +355,77 @@ void APIServlet::createTable(
     return;
   }
 
-  auto jcolumns = json::objectLookup(jreq, "columns");
-  if (jcolumns == jreq.end()) {
+  auto jschema = json::objectLookup(jreq, "columns");
+  if (jschema == jreq.end()) {
     res->setStatus(http::kStatusBadRequest);
     res->addBody("missing field: columns");
     return;
   }
 
-  auto jprimary_key = json::objectLookup(jreq, "primary_key");
-  if (jprimary_key == jreq.end()) {
+  auto jpkey = json::objectLookup(jreq, "primary_key");
+  if (jpkey == jreq.end()) {
     res->setStatus(http::kStatusBadRequest);
     res->addBody("missing field: primary_key");
     return;
   }
 
-  msg::MessageSchema schema(nullptr);
-  //schema.fromJSON(jreq, 
-  Vector<String> primary_key;
-  {
-    auto num_keys = json::arrayLength(jprimary_key, jreq.end());
-    for (size_t i = 0; i < num_keys; ++i) {
-      auto key = json::arrayGetString(jprimary_key, jreq.end(), i);
-      if (key.isEmpty()) {
-        //TODO handle
-      } else {
-        primary_key.emplace_back(key.get());
+  std::vector<std::string> primary_key;
+  auto primary_key_count = json::arrayLength(jpkey, jreq.end());
+  for (size_t i = 0; i < primary_key_count; ++i) {
+    auto pkey_part = json::arrayGetString(jpkey, jreq.end(), i);
+    if (pkey_part.isEmpty()) {
+      res->setStatus(http::kStatusBadRequest);
+      res->addBody("invalid field: primary_key");
+      return;
+    }
+
+    primary_key.emplace_back(pkey_part.get());
+  }
+
+  std::vector<std::pair<std::string, std::string>> properties;
+  auto jprops = json::objectLookup(jreq, "properties");
+  if (jprops != jreq.end()) {
+    auto props_count = json::arrayLength(jprops, jreq.end());
+    for (size_t i = 0; i < props_count; ++i) {
+      auto jprop = json::arrayLookup(jprops, jreq.end(), i);
+      if (jprop == jreq.end()) {
+        res->setStatus(http::kStatusBadRequest);
+        res->addBody("invalid field: properties");
+        return;
       }
+
+      auto prop_key = json::arrayGetString(jprop, jreq.end(), 0);
+      auto prop_value = json::arrayGetString(jprop, jreq.end(), 1);
+      if (prop_key.isEmpty() || prop_value.isEmpty()) {
+        res->setStatus(http::kStatusBadRequest);
+        res->addBody("invalid field: primary_key");
+        return;
+      }
+
+      properties.emplace_back(prop_key.get(), prop_value.get());
     }
   }
 
-  auto rc = dbctx->table_service->createTable(
-      database.get(),
-      table_name.get(),
-      schema,
-      primary_key);
+  try {
+    msg::MessageSchema schema(nullptr);
+    schema.fromJSON(jschema, jreq.end());
 
-  if (!rc.isSuccess()) {
-    logError("eventql", rc.message(), "error");
+    auto rc = dbctx->table_service->createTable(
+        session->getEffectiveNamespace(),
+        table_name.get(),
+        schema,
+        primary_key,
+        properties);
+
+    if (!rc.isSuccess()) {
+      RAISE(kRuntimeError, rc.message());
+    }
+
+    res->setStatus(http::kStatusCreated);
+  } catch (const StandardException& e) {
+    logError("analyticsd", e, "error");
     res->setStatus(http::kStatusInternalServerError);
-    res->addBody(StringUtil::format("error: $0", rc.message()));
+    res->addBody(StringUtil::format("error: $0", e.what()));
     return;
   }
 
@@ -572,62 +433,115 @@ void APIServlet::createTable(
 }
 
 void APIServlet::addTableField(
-  Session* session,
-  const http::HTTPRequest* req,
-  http::HTTPResponse* res) {
-auto dbctx = session->getDatabaseContext();
-auto jreq = json::parseJSON(req->body());
+    Session* session,
+    const http::HTTPRequest* req,
+    http::HTTPResponse* res) {
+  auto dbctx = session->getDatabaseContext();
 
-/* database */
-auto database = getRequestDatabase(session, req, jreq);
-if (database.isEmpty()) {
-  RAISE(kRuntimeError, "missing field: database");
-}
+  URI uri(req->uri());
+  const auto& params = uri.queryParams();
 
-auto table_name = json::objectGetString(jreq, "table");
-if (table_name.isEmpty()) {
-  res->setStatus(http::kStatusBadRequest);
-    res->addBody("missing field: table");
-    return;
-  }
-
-  auto field_name = json::objectGetString(jreq, "field_name");
-  if (field_name.isEmpty()) {
+  String table_name;
+  if (!URI::getParam(params, "table", &table_name)) {
     res->setStatus(http::kStatusBadRequest);
-    res->addBody("missing field: field_name");
+    res->addBody("missing ?table=... parameter");
     return;
   }
 
-  auto field_type_str = json::objectGetString(jreq, "field_type");
-  if (field_type_str.isEmpty()) {
+  auto table_opt = dbctx->partition_map->findTable(session->getEffectiveNamespace(), table_name);
+  if (table_opt.isEmpty()) {
+    res->setStatus(http::kStatusNotFound);
+    res->addBody("table not found");
+    return;
+  }
+  const auto& table = table_opt.get();
+
+  String field_name;
+  if (!URI::getParam(params, "field_name", &field_name)) {
     res->setStatus(http::kStatusBadRequest);
-    res->addBody("missing field: field_type");
+    res->addBody("missing &field_name=... parameter");
     return;
   }
 
-  auto repeated = json::objectGetBool(jreq, "repeated");
-  auto optional = json::objectGetBool(jreq, "optional");
-
-  Vector<TableService::AlterTableOperation> operations;
-  TableService::AlterTableOperation operation;
-  operation.optype = TableService::AlterTableOperationType::OP_ADD_COLUMN;
-  operation.field_name = field_name.get();
-  operation.field_type = msg::fieldTypeFromString(field_type_str.get());
-  operation.is_repeated = repeated.isEmpty() ? false : repeated.get();
-  operation.is_optional =  optional.isEmpty() ? false : optional.get();
-  operations.emplace_back(operation);
-
-  auto rc = dbctx->table_service->alterTable(
-      database.get(),
-      table_name.get(),
-      operations);
-
-  if (!rc.isSuccess()) {
+  String field_type_str;
+  if (!URI::getParam(params, "field_type", &field_type_str)) {
     res->setStatus(http::kStatusBadRequest);
-    res->addBody(StringUtil::format("error: $0", rc.message()));
+    res->addBody("missing &field_name=... parameter");
     return;
   }
 
+  String repeated_param;
+  URI::getParam(params, "repeated", &repeated_param);
+  auto repeated = Human::parseBoolean(repeated_param);
+
+  String optional_param;
+  URI::getParam(params, "optional", &optional_param);
+  auto optional = Human::parseBoolean(optional_param);
+
+  auto td = table->config();
+  auto schema = msg::MessageSchema::decode(td.config().schema());
+
+  uint32_t next_field_id;
+  if (td.has_next_field_id()) {
+    next_field_id = td.next_field_id();
+  } else {
+    next_field_id = schema->maxFieldId() + 1;
+  }
+
+  auto cur_schema = schema;
+  auto field = field_name;
+
+  while (StringUtil::includes(field, ".")) {
+    auto prefix_len = field.find(".");
+    auto prefix = field.substr(0, prefix_len);
+
+    field = field.substr(prefix_len + 1);
+    if (!cur_schema->hasField(prefix)) {
+      res->setStatus(http::kStatusNotFound);
+      res->addBody(StringUtil::format("field $0 not found", prefix));
+      return;
+    }
+
+    auto parent_field_id = cur_schema->fieldId(prefix);
+    auto parent_field_type = cur_schema->fieldType(parent_field_id);
+    if (parent_field_type != msg::FieldType::OBJECT) {
+      res->setStatus(http::kStatusBadRequest);
+      res->addBody(StringUtil::format(
+        "can't add field to a field of type $0",
+        fieldTypeToString(parent_field_type)));
+      return;
+    }
+
+    cur_schema = cur_schema->fieldSchema(parent_field_id);
+  }
+
+  auto field_type = msg::fieldTypeFromString(field_type_str);
+  if (field_type == msg::FieldType::OBJECT) {
+    cur_schema->addField(
+          msg::MessageSchemaField::mkObjectField(
+              next_field_id,
+              field,
+              repeated.isEmpty() ? false : repeated.get(),
+              optional.isEmpty() ? false : optional.get(),
+              mkRef(new msg::MessageSchema(nullptr))));
+
+
+  } else {
+    cur_schema->addField(
+          msg::MessageSchemaField(
+              next_field_id,
+              field,
+              field_type,
+              0,
+              repeated.isEmpty() ? false : repeated.get(),
+              optional.isEmpty() ? false : optional.get()));
+  }
+
+
+  td.set_next_field_id(next_field_id + 1);
+  td.mutable_config()->set_schema(schema->encode().toString());
+
+  dbctx->config_directory->updateTableConfig(td);
   res->setStatus(http::kStatusCreated);
   res->addBody("ok");
   return;
@@ -638,49 +552,165 @@ void APIServlet::removeTableField(
     const http::HTTPRequest* req,
     http::HTTPResponse* res) {
   auto dbctx = session->getDatabaseContext();
-  auto jreq = json::parseJSON(req->body());
 
-  /* database */
-  auto database = getRequestDatabase(session, req, jreq);
-  if (database.isEmpty()) {
-    RAISE(kRuntimeError, "missing field: database");
-  }
+  URI uri(req->uri());
+  const auto& params = uri.queryParams();
 
-  auto table_name = json::objectGetString(jreq, "table");
-  if (table_name.isEmpty()) {
+  String table_name;
+  if (!URI::getParam(params, "table", &table_name)) {
     res->setStatus(http::kStatusBadRequest);
-    res->addBody("missing field: table");
+    res->addBody("missing ?table=... parameter");
     return;
   }
 
-  auto field_name = json::objectGetString(jreq, "field_name");
-  if (field_name.isEmpty()) {
+  auto table_opt = dbctx->partition_map->findTable(session->getEffectiveNamespace(), table_name);
+  if (table_opt.isEmpty()) {
+    res->setStatus(http::kStatusNotFound);
+    res->addBody("table not found");
+    return;
+  }
+  const auto& table = table_opt.get();
+
+  String field_name;
+  if (!URI::getParam(params, "field_name", &field_name)) {
     res->setStatus(http::kStatusBadRequest);
-    res->addBody("missing field: field_name");
+    res->addBody("missing &field_name=... parameter");
     return;
   }
 
-  Vector<TableService::AlterTableOperation> operations;
-  TableService::AlterTableOperation operation;
-  operation.optype = TableService::AlterTableOperationType::OP_REMOVE_COLUMN;
-  operation.field_name = field_name.get();
-  operations.emplace_back(operation);
+  auto td = table->config();
+  auto schema = msg::MessageSchema::decode(td.config().schema());
+  auto cur_schema = schema;
+  auto field = field_name;
 
-  auto rc = dbctx->table_service->alterTable(
-      database.get(),
-      table_name.get(),
-      operations);
+  while (StringUtil::includes(field, ".")) {
+    auto prefix_len = field.find(".");
+    auto prefix = field.substr(0, prefix_len);
 
-  if (!rc.isSuccess()) {
-    res->setStatus(http::kStatusBadRequest);
-    res->addBody(StringUtil::format("error: $0", rc.message()));
+    field = field.substr(prefix_len + 1);
+
+    if (!cur_schema->hasField(prefix)) {
+      res->setStatus(http::kStatusNotFound);
+      res->addBody("field not found");
+      return;
+    }
+    cur_schema = cur_schema->fieldSchema(cur_schema->fieldId(prefix));
+  }
+
+  if (!cur_schema->hasField(field)) {
+    res->setStatus(http::kStatusNotFound);
+    res->addBody("field not found");
     return;
   }
 
+  if (!td.has_next_field_id()) {
+    td.set_next_field_id(schema->maxFieldId() + 1);
+  }
+
+  cur_schema->removeField(cur_schema->fieldId(field));
+  td.mutable_config()->set_schema(schema->encode().toString());
+
+  dbctx->config_directory->updateTableConfig(td);
   res->setStatus(http::kStatusCreated);
   res->addBody("ok");
   return;
 }
+
+void APIServlet::addTableTag(
+    Session* session,
+    const http::HTTPRequest* req,
+    http::HTTPResponse* res) {
+  auto dbctx = session->getDatabaseContext();
+
+  URI uri(req->uri());
+  const auto& params = uri.queryParams();
+
+  String table_name;
+  if (!URI::getParam(params, "table", &table_name)) {
+    res->setStatus(http::kStatusBadRequest);
+    res->addBody("missing ?table=... parameter");
+    return;
+  }
+
+  auto table_opt = dbctx->partition_map->findTable(session->getEffectiveNamespace(), table_name);
+  if (table_opt.isEmpty()) {
+    res->setStatus(http::kStatusNotFound);
+    res->addBody("table not found");
+    return;
+  }
+  const auto& table = table_opt.get();
+
+  String tag;
+  if (!URI::getParam(params, "tag", &tag)) {
+    res->setStatus(http::kStatusBadRequest);
+    res->addBody("missing &tag=... parameter");
+    return;
+  }
+
+  auto td = table->config();
+  td.add_tags(tag);
+
+  dbctx->config_directory->updateTableConfig(td);
+  res->setStatus(http::kStatusCreated);
+  res->addBody("ok");
+  return;
+}
+
+void APIServlet::removeTableTag(
+    Session* session,
+    const http::HTTPRequest* req,
+    http::HTTPResponse* res) {
+  auto dbctx = session->getDatabaseContext();
+
+  URI uri(req->uri());
+  const auto& params = uri.queryParams();
+
+  String table_name;
+  if (!URI::getParam(params, "table", &table_name)) {
+    res->setStatus(http::kStatusBadRequest);
+    res->addBody("missing ?table=... parameter");
+    return;
+  }
+
+  String tag;
+  if (!URI::getParam(params, "tag", &tag)) {
+    res->setStatus(http::kStatusBadRequest);
+    res->addBody("missing ?tag=... parameter");
+    return;
+  }
+
+  auto table_opt = dbctx->partition_map->findTable(
+      session->getEffectiveNamespace(),
+      table_name);
+
+  if (table_opt.isEmpty()) {
+    res->setStatus(http::kStatusNotFound);
+    res->addBody("table not found");
+    return;
+  }
+
+  auto table = table_opt.get();
+  auto td = table->config();
+  auto tags = td.mutable_tags();
+
+
+  for (size_t i = tags->size() - 1; ; --i) {
+    if (tags->Get(i) == tag) {
+      tags->DeleteSubrange(i, 1);
+    }
+
+    if (i == 0) {
+      break;
+    }
+
+  }
+
+  dbctx->config_directory->updateTableConfig(td);
+  res->setStatus(http::kStatusCreated);
+  res->addBody("ok");
+  return;
+}
+
 
 void APIServlet::insertIntoTable(
     Session* session,
@@ -782,17 +812,22 @@ void APIServlet::executeSQL(
     http::HTTPResponse* res,
     RefPtr<http::HTTPResponseStream> res_stream) {
   try {
-    auto jreq = json::parseJSON(req->body());
+    URI uri(req->uri());
+    URI::ParamList params = uri.queryParams();
+    URI::parseQueryString(req->body().toString(), &params);
 
-    auto format_opt = json::objectGetString(jreq, "format");
-    auto format = format_opt.isEmpty() ? "json" : format_opt.get();
+    String format;
+    URI::getParam(params, "format", &format);
+    if (format.empty()) {
+      format = "json";
+    }
 
     if (format == "binary") {
-      executeSQL_BINARY(jreq, session, req, res, res_stream);
+      executeSQL_BINARY(params, session, req, res, res_stream);
     } else if (format == "json") {
-      executeSQL_JSON(jreq, session, req, res, res_stream);
+      executeSQL_JSON(params, session, req, res, res_stream);
     } else if (format == "json_sse") {
-      executeSQL_JSONSSE(jreq, session, req, res, res_stream);
+      executeSQL_JSONSSE(params, session, req, res, res_stream);
     } else {
       res->setStatus(http::kStatusBadRequest);
       res->addBody("invalid format: " + format);
@@ -807,7 +842,7 @@ void APIServlet::executeSQL(
 }
 
 void APIServlet::executeSQL_ASCII(
-    const json::JSONObject jreq,
+    const URI::ParamList& params,
     Session* session,
     const http::HTTPRequest* req,
     http::HTTPResponse* res,
@@ -845,15 +880,15 @@ void APIServlet::executeSQL_ASCII(
 }
 
 void APIServlet::executeSQL_BINARY(
-    const json::JSONObject jreq,
+    const URI::ParamList& params,
     Session* session,
     const http::HTTPRequest* req,
     http::HTTPResponse* res,
     RefPtr<http::HTTPResponseStream> res_stream) {
   auto dbctx = session->getDatabaseContext();
 
-  auto query = json::objectGetString(jreq, "query");
-  if (query.isEmpty()) {
+  String query;
+  if (!URI::getParam(params, "query", &query)) {
     res->setStatus(http::kStatusBadRequest);
     res->addBody("missing ?query=... parameter");
     res_stream->writeResponse(*res);
@@ -874,9 +909,9 @@ void APIServlet::executeSQL_BINARY(
 
     csql::BinaryResultFormat result_format(write_cb, true);
 
-    auto database = getRequestDatabase(session, req, jreq);
-    if (!database.isEmpty()) {
-      auto rc = dbctx->client_auth->changeNamespace(session, database.get());
+    String database;
+    if (URI::getParam(params, "database", &database) && !database.empty()) {
+      auto rc = dbctx->client_auth->changeNamespace(session, database);
       if (!rc.isSuccess()) {
         result_format.sendError(rc.message());
         res_stream->finishResponse();
@@ -892,7 +927,7 @@ void APIServlet::executeSQL_BINARY(
 
     try {
       auto txn = dbctx->sql_service->startTransaction(session);
-      auto qplan = dbctx->sql_runtime->buildQueryPlan(txn.get(), query.get());
+      auto qplan = dbctx->sql_runtime->buildQueryPlan(txn.get(), query);
       qplan->setProgressCallback([&result_format, &qplan] () {
         result_format.sendProgress(qplan->getProgress());
       });
@@ -907,24 +942,24 @@ void APIServlet::executeSQL_BINARY(
 }
 
 void APIServlet::executeSQL_JSON(
-    const json::JSONObject jreq,
+    const URI::ParamList& params,
     Session* session,
     const http::HTTPRequest* req,
     http::HTTPResponse* res,
     RefPtr<http::HTTPResponseStream> res_stream) {
   auto dbctx = session->getDatabaseContext();
 
-  auto query = json::objectGetString(jreq, "query");
-  if (query.isEmpty()) {
+  String query;
+  if (!URI::getParam(params, "query", &query)) {
     res->setStatus(http::kStatusBadRequest);
     res->addBody("missing ?query=... parameter");
     res_stream->writeResponse(*res);
     return;
   }
 
-  auto database = getRequestDatabase(session, req, jreq);
-  if (!database.isEmpty()) {
-    auto rc = dbctx->client_auth->changeNamespace(session, database.get());
+  String database;
+  if (URI::getParam(params, "database", &database) && !database.empty()) {
+    auto rc = dbctx->client_auth->changeNamespace(session, database);
     if (!rc.isSuccess()) {
       Buffer buf;
       json::JSONOutputStream json(BufferOutputStream::fromBuffer(&buf));
@@ -958,7 +993,7 @@ void APIServlet::executeSQL_JSON(
 
   try {
     auto txn = dbctx->sql_service->startTransaction(session);
-    auto qplan = dbctx->sql_runtime->buildQueryPlan(txn.get(), query.get());
+    auto qplan = dbctx->sql_runtime->buildQueryPlan(txn.get(), query);
 
     Buffer result;
     json::JSONOutputStream json(BufferOutputStream::fromBuffer(&result));
@@ -1000,15 +1035,15 @@ void APIServlet::executeSQL_JSON(
 }
 
 void APIServlet::executeSQL_JSONSSE(
-    const json::JSONObject jreq,
+    const URI::ParamList& params,
     Session* session,
     const http::HTTPRequest* req,
     http::HTTPResponse* res,
     RefPtr<http::HTTPResponseStream> res_stream) {
   auto dbctx = session->getDatabaseContext();
 
-  auto query = json::objectGetString(jreq, "query");
-  if (query.isEmpty()) {
+  String query;
+  if (!URI::getParam(params, "query", &query)) {
     res->setStatus(http::kStatusBadRequest);
     res->addBody("missing ?query=... parameter");
     res_stream->writeResponse(*res);
@@ -1018,9 +1053,9 @@ void APIServlet::executeSQL_JSONSSE(
   auto sse_stream = mkRef(new http::HTTPSSEStream(res, res_stream));
   sse_stream->start();
 
-  auto database = getRequestDatabase(session, req, jreq);
-  if (!database.isEmpty()) {
-    auto rc = dbctx->client_auth->changeNamespace(session, database.get());
+  String database;
+  if (URI::getParam(params, "database", &database) && !database.empty()) {
+    auto rc = dbctx->client_auth->changeNamespace(session, database);
     if (!rc.isSuccess()) {
       Buffer buf;
       json::JSONOutputStream json(BufferOutputStream::fromBuffer(&buf));
@@ -1050,7 +1085,7 @@ void APIServlet::executeSQL_JSONSSE(
 
   try {
     auto txn = dbctx->sql_service->startTransaction(session);
-    auto qplan = dbctx->sql_runtime->buildQueryPlan(txn.get(), query.get());
+    auto qplan = dbctx->sql_runtime->buildQueryPlan(txn.get(), query);
 
     JSONSSECodec json_sse_codec(sse_stream);
     qplan->setProgressCallback([&json_sse_codec, &qplan] () {
@@ -1076,6 +1111,60 @@ void APIServlet::executeSQL_JSONSSE(
   }
 
   sse_stream->finish();
+}
+
+void APIServlet::executeQTree(
+    Session* session,
+    const http::HTTPRequest* req,
+    http::HTTPResponse* res,
+    RefPtr<http::HTTPResponseStream> res_stream) {
+  auto dbctx = session->getDatabaseContext();
+
+  res->setStatus(http::kStatusOK);
+  res->setHeader("Connection", "close");
+  res->setHeader("Content-Type", "application/octet-stream");
+  res->setHeader("Cache-Control", "no-cache");
+  res->setHeader("Access-Control-Allow-Origin", "*");
+  res_stream->startResponse(*res);
+
+  {
+    csql::BinaryResultFormat result_format(
+        [res_stream] (const void* data, size_t size) {
+      res_stream->writeBodyChunk(data, size);
+    });
+
+    //String database;
+    //if (URI::getParam(params, "database", &database) && !database.empty()) {
+    //  auto rc = dbctx->client_auth->changeNamespace(session, database);
+    //  if (!rc.isSuccess()) {
+    //    result_format.sendError(rc.message());
+    //    res_stream->finishResponse();
+    //    return;
+    //  }
+    //}
+
+    if (session->getEffectiveNamespace().empty()) {
+      result_format.sendError("No database selected");
+      res_stream->finishResponse();
+      return;
+    }
+
+    try {
+      auto txn = dbctx->sql_service->startTransaction(session);
+
+      csql::QueryTreeCoder coder(txn.get());
+      auto req_body_is = BufferInputStream::fromBuffer(&req->body());
+      auto qtree = coder.decode(req_body_is.get());
+      auto qplan = dbctx->sql_runtime->buildQueryPlan(txn.get(), { qtree });
+
+      result_format.sendResults(qplan.get());
+    } catch (const StandardException& e) {
+      logError("evql", "SQL Error: $0", e.what());
+      result_format.sendError(e.what());
+    }
+  }
+
+  res_stream->finishResponse();
 }
 
 } // namespace eventql
